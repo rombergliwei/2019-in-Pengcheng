@@ -1,0 +1,154 @@
+from projectq import MainEngine
+from projectq.ops import Ph, H, Rz, MatrixGate
+from projectq.meta import Loop, Compute, Uncompute, Control, Dagger
+from projectq.backends import Simulator
+from projectq.libs.math import AddConstant
+import math
+import cmath
+import numpy as np
+from fractions import Fraction
+circuit_backend = Simulator()
+eng = MainEngine(circuit_backend)
+
+alpha = 0.5
+beta = 1
+B = 0.5
+J = 2
+M = 21
+N = 13
+T = 3
+dT = T/(M-1)
+s = 0
+
+q = eng.allocate_qureg(N+1)
+#where the qubit labelled N is used as an ancillia qubit
+
+#def interaction_gate(eng, q1, q2,q3, s, J):
+    #theta = dT*s*J
+    #Ph(-theta) | q3
+    #with Control(eng, q1):
+        #Ph(2*theta) | q3
+    #with Control(eng, q2):
+        #Ph(2*theta) | q3
+    #with Control (eng, q1, q2):
+        #Ph(-4*theta) | q3
+        
+def iterate(eng, q, s, alpha, beta, dT, J):
+    interaction_gate = MatrixGate([[cmath.exp(1j*dT*s*J/2), 0, 0, 0], [0, cmath.exp(-1j*dT*s*J/2), 0, 0], [0, 0, cmath.exp(-1j*dT*s*J/2), 0], [0, 0, 0, cmath.exp(1j*dT*s*J/2)]])
+    for j in range(N):
+        H | q[j]
+        Rz(-dT*alpha) | q[j]
+        H | q[j]
+    for j in range(N):
+        Rz(-dT*s*beta) | q[j]
+    for j in range(N-1):
+        H | q[j]
+        H | q[j+1]
+        interaction_gate | (q[j], q[j+1])
+        H | q[j]
+        H | q[j+1]
+    for j in range(N-1):
+        interaction_gate | (q[j], q[j+1])
+    for j in range(N-2, -1, -1):
+        interaction_gate | (q[j], q[j+1])
+    for j in range(N-2, -1, -1):
+        H | q[j]
+        H | q[j+1]
+        interaction_gate | (q[j], q[j+1])
+        H | q[j]
+        H | q[j+1]
+    for j in range(N-2, -1, -1):
+        Rz(-dT*s*beta) | q[j]
+    for j in range(N-2, -1, -1):
+        H | q[j]
+        Rz(-dT*alpha) | q[j]
+        H | q[j]
+        
+        
+#initialize ground state
+for j in range(N):
+    H | q[j]
+    
+#perform time evolution
+for j in range(M-1):
+    s = j/(M-1)
+    iterate(eng, q, s, alpha, beta, dT, J)
+    
+eng.flush()
+#evaluate final state energy
+size = int(math.pow(2, N))
+prob = np.zeros((size))
+E = 0
+zeros = 0
+                
+I = np.eye(2)
+x = np.array([[0.,1.], [1.,0.]])
+y = 1j * np.array([[0.,-1.], [1.,0.]])
+z = np.array([[1.,0.], [0.,-1.]])
+
+Id = []
+for i in range(13):
+    Id.append(I)
+
+Hx, Hz, Hx2, Hz2 = [], [], [], []
+
+h0 = 1
+for i in range(13):
+    Id[i] = x
+    for j in Id:
+        h0 = np.kron(h0,j)
+    Id[i] = I
+    Hx.append(h0)
+    h0 = 1
+for i in range(13):
+    Id[i] = z
+    for j in Id:
+        h0 = np.kron(h0,j)
+    Id[i] = I
+    Hz.append(h0)
+    h0 = 1
+for i in range(12):
+    Id[i] = x
+    Id[i + 1] = x
+    for j in Id:
+        h0 = np.kron(h0,j)
+    Id[i] = I
+    Hx2.append(h0)
+    h0 = 1
+for i in range(12):
+    Id[i] = z
+    Id[i + 1] = z
+    for j in Id:
+        h0 = np.kron(h0,j)
+    Id[i] = I
+    Hz2.append(h0)
+    h0 = 1
+
+
+Hp = 0
+for i in Hx:
+    Hp = np.add(Hp, -0.5 * i)
+for i in Hz:
+    Hp = np.add(Hp, -1 * i)
+for i in Hx2:
+    Hp = np.add(Hp, -2 * i)
+for i in Hz2:
+    Hp = np.add(Hp, -2 * i)
+
+eig_valp, eig_vecp = np.linalg.eig(Hp)
+real_energy = np.min(eig_valp)
+
+print(real_energy)    
+
+simulated_energy = 0
+for j in range(size):
+    jbin = ""
+    zeros = N - len(bin(int(j))[2:])
+    for m in range(zeros):
+        jbin = jbin + "0"
+    jbin = jbin + bin(int(j))[2:]
+    prob[j] = circuit_backend.get_probability(jbin, q)
+    simulated_energy = simulated_energy +prob[j]*Hp[j][j]
+
+print(simulated_energy) 
+print(simulated_error)
